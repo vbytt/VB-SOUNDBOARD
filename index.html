@@ -1,0 +1,224 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Soundboard</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#101014;color:white;
+ font-family:Arial,sans-serif;padding:25px;
+}
+header{text-align:center;margin:30px 0}
+h1{font-size:38px;margin-bottom:8px}
+h1 span{color:#a970ff}
+header p{color:#999}
+.search{
+ width:100%;padding:15px;background:#22222c;
+ color:white;border:1px solid #393943;border-radius:12px;
+ font-size:16px;margin-bottom:18px;
+}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:25px}
+button,.upload{
+ border:0;border-radius:10px;padding:14px 18px;
+ background:#34303f;color:white;font-size:15px;
+ cursor:pointer;font-weight:bold;
+}
+button:hover,.upload:hover{filter:brightness(1.3)}
+.upload{background:#8248d9}
+.stop{background:#d83d55}
+.grid{
+ display:grid;
+ grid-template-columns:repeat(auto-fill,minmax(145px,1fr));
+ gap:13px;
+}
+.sound{
+ background:#22222c;border:1px solid #393943;
+ min-height:110px;border-radius:14px;
+ display:flex;align-items:center;justify-content:center;
+ flex-direction:column;gap:10px;overflow:hidden;
+}
+.sound .emoji{font-size:27px}
+.sound small{color:#aaa}
+.sound button{width:100%;height:100%;background:transparent}
+#status{color:#aaa;text-align:center;margin:20px}
+.empty{
+ text-align:center;padding:55px 15px;
+ background:#1b1b23;border-radius:15px;color:#999;
+}
+footer{text-align:center;color:#666;margin-top:45px}
+input[type=file]{display:none}
+</style>
+</head>
+<body>
+
+<header>
+<h1>🔊 <span>MY</span> SOUNDBOARD</h1>
+<p>Upload sounds. Press buttons. Share the noise.</p>
+</header>
+
+<input class="search" id="search"
+ placeholder="🔍 Search sounds..."
+ oninput="render()">
+
+<div class="actions">
+<label class="upload" for="file">＋ UPLOAD SOUNDS</label>
+<input id="file" type="file" accept="audio/*" multiple>
+<button class="stop" onclick="stopAll()">■ STOP ALL</button>
+<button onclick="loadSounds()">↻ REFRESH</button>
+</div>
+
+<div id="status">Connecting to sound storage...</div>
+<div class="grid" id="grid"></div>
+
+<footer>MY SOUNDBOARD • POWERED BY SUPABASE</footer>
+
+<script>
+const PROJECT_URL = "https://rtxqizgymtfhxgzkcawk.supabase.co";
+const PUBLIC_KEY = "sb_publishable_f48nhJNADzol9WrzZ6Vdug_kHuRsumo";
+const BUCKET = "sounds";
+
+const client = window.supabase.createClient(
+ PROJECT_URL, PUBLIC_KEY
+);
+
+let sounds = [];
+let playing = [];
+
+const status = document.getElementById("status");
+
+function showStatus(message){
+ status.textContent = message;
+}
+
+function displayName(filename){
+ return filename.split("__").slice(2).join("__")
+  .replace(/_/g," ");
+}
+
+async function loadSounds(){
+ showStatus("Loading sounds...");
+
+ const {data,error} = await client.storage
+  .from(BUCKET)
+  .list("",{
+   limit:100,
+   sortBy:{column:"created_at",order:"desc"}
+  });
+
+ if(error){
+  showStatus("Couldn't load sounds: "+error.message);
+  return;
+ }
+
+ sounds = (data||[]).filter(f=>
+  f.name.includes("__") &&
+  /\.(mp3|wav|ogg|m4a|aac|webm)$/i.test(f.name)
+ );
+
+ showStatus(sounds.length+" sounds available");
+ render();
+}
+
+function render(){
+ const grid=document.getElementById("grid");
+ const query=document.getElementById("search").value.toLowerCase();
+ grid.innerHTML="";
+
+ const filtered=sounds.filter(s=>
+  displayName(s.name).toLowerCase().includes(query)
+ );
+
+ if(filtered.length===0){
+  grid.innerHTML='<div class="empty" style="grid-column:1/-1">🎵<br><br>No sounds yet.<br>Upload your first sound!</div>';
+  return;
+ }
+
+ filtered.forEach(sound=>{
+  const name=displayName(sound.name);
+  const url=client.storage.from(BUCKET)
+   .getPublicUrl(sound.name).data.publicUrl;
+
+  const card=document.createElement("div");
+  card.className="sound";
+
+  const btn=document.createElement("button");
+  const emoji=document.createElement("span");
+  emoji.className="emoji";
+  emoji.textContent="🎵";
+
+  const title=document.createElement("span");
+  title.textContent=name;
+
+  const small=document.createElement("small");
+  small.textContent="▶ PLAY";
+
+  btn.append(emoji,title,small);
+  btn.onclick=()=>playSound(url);
+
+  card.appendChild(btn);
+  grid.appendChild(card);
+ });
+}
+
+function playSound(url){
+ const audio=new Audio(url);
+ audio.volume=.8;
+ playing.push(audio);
+
+ audio.onended=()=>{
+  playing=playing.filter(a=>a!==audio);
+ };
+
+ audio.play().catch(()=>{
+  showStatus("Couldn't play this sound.");
+ });
+}
+
+function stopAll(){
+ playing.forEach(a=>{
+  a.pause();
+  a.currentTime=0;
+ });
+ playing=[];
+}
+
+document.getElementById("file").addEventListener("change",async e=>{
+ const files=Array.from(e.target.files||[]);
+ if(!files.length)return;
+
+ for(const file of files){
+  if(file.size>20*1024*1024){
+   showStatus(file.name+" is too big (20MB limit).");
+   continue;
+  }
+
+  const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+  const path=Date.now()+"__"+crypto.randomUUID()+"__"+safeName;
+
+  showStatus("Uploading "+file.name+"...");
+
+  const {error}=await client.storage
+   .from(BUCKET)
+   .upload(path,file,{
+    contentType:file.type||"application/octet-stream",
+    upsert:false
+   });
+
+  if(error){
+   showStatus("Upload failed: "+error.message);
+   continue;
+  }
+ }
+
+ e.target.value="";
+ await loadSounds();
+});
+
+loadSounds();
+</script>
+</body>
+</html>
